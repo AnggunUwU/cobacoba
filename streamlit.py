@@ -7,54 +7,84 @@ from tensorflow.keras.layers import LSTM, Dense
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import mean_absolute_error
 from datetime import datetime
+import io
 
 # Konfigurasi Aplikasi
 st.set_page_config(page_title="📅 Prediksi Wisatawan - LSTM", layout="wide")
 st.title('📅 Prediksi Jumlah Wisatawan per Pintu Masuk')
 
 # ======================================
-# 1. Load dan Persiapkan Data
+# 1. Upload dan Persiapkan Data
 # ======================================
+st.subheader("📤 Upload Data")
+uploaded_files = st.file_uploader(
+    "Unggah file Excel/CSV data wisatawan", 
+    type=["xlsx", "csv"],
+    accept_multiple_files=True
+)
+
 @st.cache_data
-def load_data():
-    url = "https://github.com/AnggunUwU/prediksi-wisata-mancanegara-lstm/raw/main/data.xlsx"
-
-    try:
-        # Baca semua sheet dan gabungkan
-        all_sheets = pd.read_excel(url, sheet_name=None)
-        df = pd.concat(all_sheets.values(), ignore_index=True)
-
-        # Bersihkan data
+def load_data(uploaded_files):
+    dfs = []
+    
+    for uploaded_file in uploaded_files:
+        try:
+            if uploaded_file.name.endswith('.xlsx'):
+                # Baca semua sheet dari file Excel
+                all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+                for sheet_name, sheet_df in all_sheets.items():
+                    dfs.append(sheet_df)
+            elif uploaded_file.name.endswith('.csv'):
+                # Baca file CSV
+                csv_df = pd.read_csv(uploaded_file)
+                dfs.append(csv_df)
+        except Exception as e:
+            st.error(f"Gagal memuat file {uploaded_file.name}: {str(e)}")
+            continue
+    
+    if not dfs:
+        return pd.DataFrame()
+    
+    # Gabungkan semua dataframe
+    df = pd.concat(dfs, ignore_index=True)
+    
+    # Bersihkan data
+    if 'Pintu Masuk' in df.columns:
         df = df.dropna(subset=['Pintu Masuk'])
         df = df[df['Pintu Masuk'] != 'Pintu Masuk']  # Hapus baris header yang terduplikat
+    
+    # Ubah ke format long jika diperlukan
+    if 'Januari' in df.columns:  # Jika masih format wide
+        df = df.melt(
+            id_vars=['Pintu Masuk', 'Tahun'],
+            value_vars=['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+                       'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'],
+            var_name='Bulan',
+            value_name='Jumlah_Wisatawan'
+        )
+        bulan_mapping = {m: i+1 for i, m in enumerate([
+            'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+            'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+        ])}
+        df['Bulan'] = df['Bulan'].map(bulan_mapping)
+        df['Tahun-Bulan'] = pd.to_datetime(
+            df['Tahun'].astype(str) + '-' + df['Bulan'].astype(str) + '-01'
+        )
+    
+    return df.sort_values(['Pintu Masuk', 'Tahun-Bulan'])
 
-        # Ubah ke format long jika diperlukan
-        if 'Januari' in df.columns:  # Jika masih format wide
-            df = df.melt(
-                id_vars=['Pintu Masuk', 'Tahun'],
-                value_vars=['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-                           'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'],
-                var_name='Bulan',
-                value_name='Jumlah_Wisatawan'
-            )
-            bulan_mapping = {m: i+1 for i, m in enumerate([
-                'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-                'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
-            ])}
-            df['Bulan'] = df['Bulan'].map(bulan_mapping)
-            df['Tahun-Bulan'] = pd.to_datetime(
-                df['Tahun'].astype(str) + '-' + df['Bulan'].astype(str) + '-01'
-            )
+# Tombol untuk menggunakan data contoh
+use_sample_data = st.checkbox("Gunakan data contoh jika tidak ada file diunggah")
 
-        return df.sort_values(['Pintu Masuk', 'Tahun-Bulan'])
-
-    except Exception as e:
-        st.error(f"Gagal memuat data: {str(e)}")
-        return pd.DataFrame()
-
-df = load_data()
+if use_sample_data or not uploaded_files:
+    url = "https://github.com/AnggunUwU/prediksi-wisata-mancanegara-lstm/raw/main/data.xlsx"
+    sample_data = pd.ExcelFile(io.BytesIO(requests.get(url).content))
+    df = load_data([sample_data])
+else:
+    df = load_data(uploaded_files)
 
 if df.empty:
+    st.warning("Tidak ada data yang valid ditemukan. Silakan unggah file atau gunakan data contoh.")
     st.stop()
 
 # Pilih Pintu Masuk
@@ -329,10 +359,18 @@ with st.expander("ℹ️ Panduan Penggunaan"):
     - Pilihan: 3, 6, 12, 18, atau 24 bulan
     - Default: 12 bulan
     
+    ### 📂 Format Data:
+    - File Excel/CSV dengan kolom minimal:
+      - Pintu Masuk (nama lokasi)
+      - Tahun
+      - Bulan (nama atau angka) atau kolom bulan terpisah (Januari-Desember)
+      - Jumlah_Wisatawan (nilai numerik)
+    
     ### 🛠️ Cara Penggunaan:
-    1. Pilih pintu masuk
-    2. Atur parameter
-    3. Klik 'Jalankan Model'
-    4. Lihat hasil di tab Prediksi
-    5. Download hasil jika perlu
+    1. Unggah satu atau beberapa file data
+    2. Pilih pintu masuk
+    3. Atur parameter
+    4. Klik 'Jalankan Model'
+    5. Lihat hasil di tab Prediksi
+    6. Download hasil jika perlu
     """)
